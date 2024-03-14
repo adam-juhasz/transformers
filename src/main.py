@@ -5,7 +5,7 @@ from network import ImageClassificationBase, ImageRegressionBase, get_vision_tra
 if __name__ == '__main__':
     device = get_default_device()
     
-    train_dl, val_dl = load_mnist(device=devide)
+    train_dl, val_dl = load_mnist(device=device)
 
     model = to_device(get_vision_transformer(ImageClassificationBase)(), device)
 

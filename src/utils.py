@@ -1,6 +1,7 @@
 from matplotlib import pyplot as plt
 
 import os
+from tqdm import tqdm
 
 import torch
 from torch import nn
@@ -64,7 +65,7 @@ def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
-def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD):
+def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD, grad_clip=0.1):
     torch.cuda.empty_cache()
     history = []
     optimizer = opt_func(model.parameters(), lr)
@@ -77,7 +78,7 @@ def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD):
 
         lr = []
 
-        for batch in train_loader:
+        for batch in tdqm(train_loader, desc = 'Epoch #' + str(epoch) + ' Progress Bar'):
             loss = model.training_step(batch)
             train_losses.append(loss)
             loss.backward()
