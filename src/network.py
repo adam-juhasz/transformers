@@ -168,44 +168,78 @@ class ImageClassificationBase(nn.Module):
         print("Epoch [{}],  train_loss: {:.4f}, val_loss: {:.4f}, val_acc: {:.4f}".format(
             epoch, result['train_loss'], result['val_loss'], result['val_acc']))
 
+class ImageRegressionBase(nn.Module):
+    def training_step(self, batch):
+        images, labels = batch
+        out = self(images.float())
+        loss = F.mse_loss(out, label.unsqueeze(1).float())
 
-class ViT(ImageClassificationBase):
-    def __init__(self, img_size=(28,28), patch_size=(4,4), n_channels=1, d_model=1024, nheads=4, d_ff=2048, blocks=8, mlp_head_units=[1024, 512], nclasses=10, dropout=0.0):
-        super(ViT, self).__init__()
+        return loss
+    
+    def validation_step(self, batch):
+        images, labels = batch
+        out = self(images.float())
+        loss = F.mse_loss(out, label.unsqueeze(1).float())
 
-        self.img2seq = Img2Seq(img_size, patch_size, n_channels, d_model)
+        return {'loss': loss}
 
-        self.encoder_layers = nn.ModuleList([EncoderLayer(d_model, nheads, d_ff, dropout) for _ in range(blocks)])
+    def validation_epoch_end(self, outputs):
+        loss = torch.stack([x['loss'] for x in outputs]).mean().item()
 
-        self.mlp = self._get_mlp(d_model, mlp_head_units, nclasses)
-        self.dropout = nn.Dropout(dropout)
+        return {'val_loss': loss}
 
-        self.output = nn.Sigmoid() if nclasses == 1 else nn.Softmax(dim=1)
+    def epoch_end(self, epoch, result):
+        print("Epoch [{}],  train_loss: {:.4f}, val_loss: {:.4f}".format(
+            epoch, result['train_loss'], result['val_loss']))
 
 
-    def _get_mlp(self, in_features, hidden_units, out_features):
-        """
-        Returns a MLP head
-        """
-        dims = [in_features] + hidden_units + [out_features]
-        layers = []
+def get_vision_transformer(base):
 
-        for dim1, dim2 in zip(dims[:-2], dims[1:-1]):
-            layers.append(nn.Linear(dim1, dim2))
-            layers.append(nn.ReLU())
-        layers.append(nn.Linear(dims[-2], dims[-1]))
+    class ViT(base):
+        def __init__(self, img_size=(28,28), patch_size=(4,4), n_channels=1, d_model=1024, nheads=4, d_ff=2048, blocks=8, mlp_head_units=[1024, 512], nclasses=10, dropout=0.0):
+            super(ViT, self).__init__()
 
-        return nn.Sequential(*layers)
+            self.img2seq = Img2Seq(img_size, patch_size, n_channels, d_model)
 
-    def __call__(self, src):
+            self.encoder_layers = nn.ModuleList([EncoderLayer(d_model, nheads, d_ff, dropout) for _ in range(blocks)])
 
-        imgseq = self.img2seq(src)
+            if type(base) == type(ImageClassificationBase):
+                self.mlp = self._get_mlp(d_model, mlp_head_units, nclasses)
+                self.dropout = nn.Dropout(dropout)
 
-        enc_output = imgseq
-        for enc_layer in self.encoder_layers:
-            enc_output = enc_layer(enc_output, mask=None)
+                self.output = nn.Sigmoid() if nclasses == 1 else nn.Softmax(dim=1)
+            elif type(base) == type(RegressionBase):
+                self.mlp = self._get_mlp(d_model, mlp_head_units[:-1], mlp_head_units[-1])
+                self.dropout = nn.Dropout(dropout)
 
-        enc_output = enc_output[:, 0, :] # ?????
-        output = self.output(self.dropout(self.mlp(enc_output)))
+                self.output = nn.Linear(mlp_head_units[-1], 1)
 
-        return output
+
+        def _get_mlp(self, in_features, hidden_units, out_features):
+            """
+            Returns a MLP head
+            """
+            dims = [in_features] + hidden_units + [out_features]
+            layers = []
+
+            for dim1, dim2 in zip(dims[:-2], dims[1:-1]):
+                layers.append(nn.Linear(dim1, dim2))
+                layers.append(nn.ReLU())
+            layers.append(nn.Linear(dims[-2], dims[-1]))
+
+            return nn.Sequential(*layers)
+
+        def __call__(self, src):
+
+            imgseq = self.img2seq(src)
+
+            enc_output = imgseq
+            for enc_layer in self.encoder_layers:
+                enc_output = enc_layer(enc_output, mask=None)
+
+            enc_output = enc_output[:, 0, :] # ?????
+            output = self.output(self.dropout(self.mlp(enc_output)))
+
+            return output
+    
+    return ViT
