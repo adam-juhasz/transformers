@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
-from torchvision import datasets, transforms
+from torchvision import datasets
 
 from torchvision import transforms as tt
 from torchvision.io import read_image
@@ -17,6 +17,7 @@ def plot_losses(history, name='./losses'):
     train_losses = [x.get('train_loss') for x in history]
     val_losses = [x['val_loss'] for x in history]
     
+    plt.figure()
     plt.plot(train_losses, '-bx')
     plt.plot(val_losses, '-rx')
     plt.xlabel('epoch')
@@ -28,6 +29,7 @@ def plot_losses(history, name='./losses'):
 def plot_accuracies(history, name='./accuracies'):
     accuracies = [x['val_acc'] for x in history]
 
+    plt.figure()
     plt.plot(accuracies, '-x')
     plt.xlabel('epoch')
     plt.ylabel('accuracy')
@@ -65,7 +67,7 @@ def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
-def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD, grad_clip=0.1):
+def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD, grad_clip=0.1, steps_per_epoch=len(train_loader)):
     torch.cuda.empty_cache()
     history = []
     optimizer = opt_func(model.parameters(), lr)
@@ -78,7 +80,7 @@ def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD, g
 
         lr = []
 
-        for batch in tdqm(train_loader, desc = 'Epoch #' + str(epoch) + ' Progress Bar'):
+        for batch in tdqm(train_loader, desc = 'Epoch #' + str(epoch) + '/' + str(epochs)):
             loss = model.training_step(batch)
             train_losses.append(loss)
             loss.backward()
@@ -96,6 +98,8 @@ def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD, g
         result['train_loss'] = torch.stack(train_losses).mean().item()
         model.epoch_end(epoch, result)
         history.append(result)
+        if epoch % 20 == 0:
+            plot_regression(model, val_loader, name="./" + str(num) + "_regression_" + str(epoch))
 
     return history
 
@@ -134,15 +138,15 @@ def load_mnist(device=get_default_device):
             root='./data',
             train=True,
             download=True,
-            transform=transforms.Compose(
-            [
-                transforms.ToTensor(), # first, convert image to PyTorch tensor
-                transforms.Normalize((0.1307,), (0.3081,)) # normalize inputs
-            ]
-            )
+            transform=tt.Compose([
+                tt.ToTensor(), # first, convert image to PyTorch tensor
+                tt.Normalize((0.1307,), (0.3081,)) # normalize inputs
+            ])
         ),
-        batch_size=32,
-        shuffle=True
+        batch_size=512,
+        shuffle=True,
+        num_workers=16,
+        pin_memory=True
     )
 
     val_dl = DataLoader(
@@ -150,15 +154,15 @@ def load_mnist(device=get_default_device):
             root='./data',
             train=False,
             download=True,
-            transform=transforms.Compose(
-            [
-                transforms.ToTensor(), # first, convert image to PyTorch tensor
-                transforms.Normalize((0.1307,), (0.3081,)) # normalize inputs
-            ]
-            )
+            transform=tt.Compose([
+                tt.ToTensor(), # first, convert image to PyTorch tensor
+                tt.Normalize((0.1307,), (0.3081,)) # normalize inputs
+            ])
         ),
-        batch_size=1024,
-        shuffle=False
+        batch_size=32,
+        shuffle=False,
+        num_workers=16,
+        pin_memory=True
     )
 
     train_dl = DeviceDataLoader(train_dl, device)
@@ -169,7 +173,7 @@ def load_mnist(device=get_default_device):
 class RegressionCoinDataset(Dataset):
     def __init__(self, directory, transform=False):
         self.directory = directory
-        self.transform = transforms
+        self.transform = transform
         self.files = os.listdir(self.directory)
 
     def __len__(self):
@@ -178,7 +182,7 @@ class RegressionCoinDataset(Dataset):
     def __getitem__(self, idx):
         name = self.files[idx]
 
-        label = float(name.split('_')[0]) / 100
+        label = float(name.split('_')[0]) / 100.0
 
         im = read_image(os.path.join(self.directory, name))
         if self.transform:
@@ -187,19 +191,40 @@ class RegressionCoinDataset(Dataset):
         return im, label
 
 def load_br_coins(
-    path='', 
-    transforms=tt.Compose(
-        [
-            tt.Resize(224), 
-            tt.RandomCrop(224)
-        ]
-        ),
+    path='/container_app/br-coins', 
+    transforms=tt.Compose([
+            tt.Resize((240, 320)), antialias=True
+        ]),
     device=get_default_device):
 
-    train_ds = RegressionCoinDataset(os.path.join(path, 'train'), transforms)
-    test_ds = RegressionCoinDataset(os.path.join(path, 'test'), transforms)
+    train_ds = RegressionCoinDataset(
+        os.path.join(path, 'train'), 
+        transforms
+    )
+    test_ds = RegressionCoinDataset(
+        os.path.join(path, 'test'), 
+        transforms
+    )
 
-    train_dl = DeviceDataLoader(DataLoader(train_ds, batch_size=256, shuffle=True, num_workers=16, pin_memory=True), device)
-    test_dl = DeviceDataLoader(DataLoader(test_ds, batch_size=256, shuffle=False, num_workers=16, pin_memory=True), device)
+    train_dl = DeviceDataLoader(
+        DataLoader(
+            train_ds, 
+            batch_size=12, 
+            shuffle=True, 
+            num_workers=16, 
+            pin_memory=True
+        ), 
+        device
+    )
+    test_dl = DeviceDataLoader(
+        DataLoader(
+            test_ds, 
+            batch_size=1, 
+            shuffle=False, 
+            num_workers=16, 
+            pin_memory=True
+        ), 
+        device
+    )
 
     return train_dl, test_dl

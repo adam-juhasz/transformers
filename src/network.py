@@ -16,10 +16,10 @@ class Img2Seq(nn.Module):
         self.nh, self.nw = img_size[0] // patch_size[0], img_size[1] // patch_size[1]
         n_tokens = self.nh * self.nw
 
-        token_dim = patch_size[0] * patch_size[1] * n_channels
+        token_dim = patch_size[0] * patch_size[1] * n_channels # P*P*C
 
-        self.linear = nn.Linear(token_dim, d_model)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.linear = nn.Linear(token_dim, d_model) # P*P*C -> D - patch embedding
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model)) # is class token necessary ???
         self.pos_emb = nn.Parameter(torch.randn(n_tokens, d_model))
 
 
@@ -33,10 +33,10 @@ class Img2Seq(nn.Module):
         batch = torch.reshape(batch, [b, nh * nw, ph * pw * c])
 
         batch = self.linear(batch) # b, nh*nw, d_model
-        cls = self.cls_token.expand([b, -1, -1])
+        class_t = self.cls_token.expand([b, -1, -1])
         emb = batch + self.pos_emb
 
-        return torch.cat([cls, emb], axis=1)
+        return torch.cat([class_t, emb], axis=1) # is class token necessary when not doing classification and how should it work in case of classification ????
 
 
     def _patchify(self, batch):
@@ -57,12 +57,13 @@ class Img2Seq(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model, num_heads):
         super(MultiHeadAttention, self).__init__()
-        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
+        assert d_model % num_heads == 0, "d_model must be divisible by num_heads" # is it really necessary ???
 
         self.d_model = d_model
         self.num_heads = num_heads
-        self.d_k = d_model // num_heads
+        self.d_k = d_model // num_heads # is d_k actually defined like this ???
 
+        # Dimensions are right for sure???
         self.W_q = nn.Linear(d_model, d_model)
         self.W_k = nn.Linear(d_model, d_model)
         self.W_v = nn.Linear(d_model, d_model)
@@ -79,7 +80,7 @@ class MultiHeadAttention(nn.Module):
         output = torch.matmul(attn_probs, V)
         return output
 
-    def split_heads(self, x):
+    def split_heads(self, x): # linear projection of the queries num_head times instead of reshaping???
         batch_size, seq_length, d_model = x.size()
         return x.view(batch_size, seq_length, self.num_heads, self.d_k).transpose(1,2)
 
@@ -135,11 +136,18 @@ class EncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask):
-        attn_output = self.self_attn(x, x, x, mask)
-        x = self.norm1(x + self.dropout(attn_output))
 
-        ff_output = self.feed_forward(x)
-        x = self.norm2(x + self.dropout(ff_output))
+        """
+        ????
+        in ViT paper:
+        norm1 = self.norm1(x)
+        x = self.self_attn(norm1, norm1, mask) + x
+
+        x = self.feed_forward(self.norm2(x)) + x
+        """
+        x = self.norm1(x + self.dropout(self.self_attn(x, x, x, mask)))
+
+        x = self.norm2(x + self.dropout(self.feed_forward(x)))
 
         return x
 
@@ -172,14 +180,14 @@ class ImageRegressionBase(nn.Module):
     def training_step(self, batch):
         images, labels = batch
         out = self(images.float())
-        loss = F.mse_loss(out, label.unsqueeze(1).float())
+        loss = F.mse_loss(out, labels.unsqueeze(1).float())
 
         return loss
     
     def validation_step(self, batch):
         images, labels = batch
         out = self(images.float())
-        loss = F.mse_loss(out, label.unsqueeze(1).float())
+        loss = F.mse_loss(out, labels.unsqueeze(1).float())
 
         return {'loss': loss}
 
@@ -203,16 +211,16 @@ def get_vision_transformer(base):
 
             self.encoder_layers = nn.ModuleList([EncoderLayer(d_model, nheads, d_ff, dropout) for _ in range(blocks)])
 
-            if type(base) == type(ImageClassificationBase):
+            if base == ImageClassificationBase:
                 self.mlp = self._get_mlp(d_model, mlp_head_units, nclasses)
                 self.dropout = nn.Dropout(dropout)
 
                 self.output = nn.Sigmoid() if nclasses == 1 else nn.Softmax(dim=1)
-            elif type(base) == type(RegressionBase):
+            elif base == RegressionBase:
                 self.mlp = self._get_mlp(d_model, mlp_head_units[:-1], mlp_head_units[-1])
                 self.dropout = nn.Dropout(dropout)
 
-                self.output = nn.Linear(mlp_head_units[-1], 1)
+                self.output = nn.Linear(mlp_head_units[-1], 1, bias=False)
 
 
         def _get_mlp(self, in_features, hidden_units, out_features):
@@ -237,7 +245,7 @@ def get_vision_transformer(base):
             for enc_layer in self.encoder_layers:
                 enc_output = enc_layer(enc_output, mask=None)
 
-            enc_output = enc_output[:, 0, :] # ?????
+            enc_output = enc_output[:, 0, :] # ????? What to take instead of the class_token
             output = self.output(self.dropout(self.mlp(enc_output)))
 
             return output
